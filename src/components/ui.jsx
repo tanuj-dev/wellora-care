@@ -1,6 +1,6 @@
 import { createContext, useContext, useId, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AppCtx, CRISIS, saveLead, validateForm, waLink } from '../utils'
+import { AppCtx, CRISIS, submitLead, validateForm, waLink } from '../utils'
 import { CITIES, ICONS, PHONE, POSTS, SERVICES, TEL } from '../data'
 
 export const serviceOptions = SERVICES.map(s => [s.slug, s.name]).concat([['other', 'Not sure yet']])
@@ -65,6 +65,12 @@ export function Consent({ children }) {
   )
 }
 
+// Hidden from people, filled in by spam bots; the server silently drops those submissions.
+export const Honeypot = () => (
+  <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden="true"
+    style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }} />
+)
+
 const THANKS = {
   'job-application': n => `Thank you, ${n}. Our hiring team will review your application and call you within 3 working days.`,
   referral: () => 'Thank you. We will contact the family within an hour and update you on the same number.',
@@ -77,26 +83,32 @@ const THANKS = {
 export function LeadForm({ kind, children, onInput, onDone }) {
   const [errors, setErrors] = useState({})
   const [done, setDone] = useState(null)
-  const submit = e => {
+  const [sending, setSending] = useState(false)
+  const [serverError, setServerError] = useState('')
+  const submit = async e => {
     e.preventDefault()
+    if (sending) return
     const f = e.currentTarget
     const errs = validateForm(f)
     setErrors(errs)
+    setServerError('')
     const first = Object.keys(errs)[0]
     if (first) { const el = f.elements[first]; el?.focus?.(); return }
-    const data = {}
-    for (const [k, v] of new FormData(f).entries()) {
-      const val = v instanceof File ? v.name : v
-      if (!val) continue
-      data[k] = data[k] ? data[k] + ', ' + val : val
+    const fd = new FormData(f)
+    const name = String(fd.get('name') || fd.get('refname') || '').split(' ')[0]
+    const mobile = String(fd.get('mobile') || '')
+    if (kind === 'counselling' && CRISIS.test(String(fd.get('message') || ''))) onDone?.(null, 'Crisis')
+    setSending(true)
+    try {
+      const { ref, priority } = await submitLead(kind, fd)
+      const msg = THANKS[kind] ? THANKS[kind](name) : `Thank you${name ? ', ' + name : ''}. A care advisor will call you on ${mobile} within 5 minutes, between 8 am and 10 pm. Later requests are called first thing next morning.`
+      onDone?.(null, priority)
+      setDone({ ref, msg })
+    } catch (err) {
+      setServerError(err.message)
+    } finally {
+      setSending(false)
     }
-    let priority = kind === 'critical-care' ? 'High' : 'Normal'
-    if (kind === 'counselling' && CRISIS.test(data.message || '')) priority = 'Crisis'
-    const ref = saveLead({ kind, priority, ...data })
-    const n = (data.name || data.refname || '').split(' ')[0]
-    const msg = THANKS[kind] ? THANKS[kind](n) : `Thank you${n ? ', ' + n : ''}. A care advisor will call you on ${data.mobile || ''} within 5 minutes, between 8 am and 10 pm. Later requests are called first thing next morning.`
-    onDone?.(data, priority)
-    setDone({ ref, msg })
   }
   if (done) {
     return (
@@ -110,7 +122,12 @@ export function LeadForm({ kind, children, onInput, onDone }) {
   }
   return (
     <FormCtx.Provider value={{ errors }}>
-      <form noValidate onSubmit={submit} onInput={onInput}>{children}</form>
+      <form noValidate onSubmit={submit} onInput={onInput} aria-busy={sending}>
+        <Honeypot />
+        {children}
+        {serverError && <div className="alert" role="alert" style={{ marginTop: 14 }}><p style={{ margin: 0 }}>{serverError}</p></div>}
+        {sending && <p className="hint" role="status" style={{ marginTop: 10 }}>Sending…</p>}
+      </form>
     </FormCtx.Provider>
   )
 }

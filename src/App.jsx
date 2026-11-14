@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import { EnquiryForm } from './components/ui'
 import ServicePage from './pages/Service'
 import Book from './pages/Book'
+import Admin from './pages/Admin'
 import { About, Blog, Careers, City, Contact, Faqs, Home, Job, Legal, Locations, NotFound, Packages, Partner, Post, Refer, Search, Services, Testimonials } from './pages/Pages'
 
 function ServiceRoute() {
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/partner" element={<Partner />} />
             <Route path="/legal/:k" element={<Legal />} />
             <Route path="/search" element={<Search />} />
+            <Route path="/admin" element={<Admin />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Layout>

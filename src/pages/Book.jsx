@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AppCtx, inr, saveLead, store, usePageTitle, validPhone, waLink } from '../utils'
+import { AppCtx, MAX_UPLOAD_BYTES, inr, store, submitLead, toFormData, usePageTitle, validPhone, waLink } from '../utils'
 import { LAB_TESTS, PHONE, SERVICES, TEL, cityBySlug, pinCity, svcBySlug } from '../data'
 import { Field, Icon, PageHead, cityOptions } from '../components/ui'
 
@@ -29,6 +29,8 @@ export default function Book() {
   const { city } = useContext(AppCtx)
   const [bk, setBk] = useState(() => init(q, city))
   const boxRef = useRef(null)
+  const filesRef = useRef([])
+  const [sending, setSending] = useState(false)
   const first = useRef(true)
   useEffect(() => {
     if (first.current) { first.current = false; return }
@@ -52,6 +54,8 @@ export default function Book() {
     } else if (bk.step === 2) {
       if (!d.name || !d.pname || !d.age) err = "Fill in your name, the patient's name and age."
       else if (!validPhone(d.mobile)) err = 'Enter a 10-digit Indian mobile number, or include your country code, for example +44.'
+      else if (d.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email)) err = 'Enter a valid email address.'
+      else if (filesRef.current.reduce((a, f) => a + f.size, 0) > MAX_UPLOAD_BYTES) err = 'Attachments are too large. Keep all files together under 4 MB, or send them on WhatsApp.'
     } else if (bk.step === 3) {
       if (!d.address?.trim() || !d.locality?.trim()) err = 'Add the full address and area.'
       else if (!/^\d{6}$/.test(d.pincode || '')) err = 'Enter a 6-digit pincode.'
@@ -60,7 +64,7 @@ export default function Book() {
         const c = pinCity(d.pincode)
         if (!c) {
           err = `We don't serve pincode ${d.pincode} yet. We've noted your request and will call you about options nearby.`
-          saveLead({ kind: 'unserviceable', service: bk.service, mobile: d.mobile, pincode: d.pincode })
+          submitLead('unserviceable', toFormData({ service: bk.service, name: d.name, mobile: d.mobile, pincode: d.pincode, locality: d.locality })).catch(() => {})
         } else patch.d = { ...d, city: c.slug }
       }
     } else if (bk.step === 4) {
@@ -70,12 +74,34 @@ export default function Book() {
     up({ ...patch, err, step: err ? bk.step : bk.step + 1 })
   }
   const back = () => up({ err: '', step: Math.max(1, bk.step - 1) })
-  const confirm = () => {
+  const confirm = async () => {
+    if (sending) return
     if (!bk.consent) return up({ err: 'Please tick the consent box to confirm.' })
-    const ref = saveLead({ kind: 'booking', service: s ? s.name : bk.service, sub: bk.sub, doctorType: bk.type, items: bk.items.map(i => i.label).join('; '), ...d })
-    if (bk.service === 'home-blood-collection') store.set('wellora-labcart', [])
-    if (bk.service === 'medical-equipment-and-consumables') store.set('wellora-eqcart', [])
-    up({ ref, step: 6, err: '' })
+    const { files: _names, ...rest } = d
+    const subName = bk.sub && s?.subs ? s.subs.find(x => x.slug === bk.sub)?.name : ''
+    const fd = toFormData({
+      ...rest,
+      pay: d.pay || 'online',
+      service: bk.service,
+      serviceName: s ? s.name : bk.service,
+      subService: subName,
+      doctorType: bk.service === 'doctor-visits-to-home' ? bk.type : '',
+      physioPackage: bk.pkg,
+      items: bk.items.map(i => `${i.label} (${inr(i.total)})`).join('; '),
+      itemsTotal: bk.items.length ? bk.items.reduce((a, i) => a + i.total, 0) : '',
+      consent: 'yes',
+    }, { files: filesRef.current })
+    setSending(true)
+    try {
+      const { ref } = await submitLead('booking', fd)
+      if (bk.service === 'home-blood-collection') store.set('wellora-labcart', [])
+      if (bk.service === 'medical-equipment-and-consumables') store.set('wellora-eqcart', [])
+      up({ ref, step: 6, err: '' })
+    } catch (e) {
+      up({ err: e.message })
+    } finally {
+      setSending(false)
+    }
   }
 
   const nav = label => (
@@ -137,7 +163,8 @@ export default function Book() {
       {bf('notes', 'Health condition and current needs', { type: 'textarea', ph: 'Conditions, recent surgery, mobility, medicines' })}
       {FILE_SERVICES.includes(bk.service) && (
         <Field name="files" label="Upload prescription, reports or discharge summary" type="file" accept=".pdf,image/*" multiple
-          onChange={e => setD('files', Array.from(e.target.files).map(f => f.name).join(', '))} help={d.files ? 'Attached: ' + d.files : undefined} />
+          onChange={e => { filesRef.current = Array.from(e.target.files); setD('files', filesRef.current.map(f => f.name).join(', ')) }}
+          help={d.files ? 'Attached: ' + d.files + '. PDF or photos, up to 4 MB in total.' : 'PDF or photos, up to 4 MB in total.'} />
       )}
       {nav()}
     </>
@@ -194,7 +221,7 @@ export default function Book() {
       <label className="check"><input type="checkbox" checked={bk.consent} onChange={e => up({ consent: e.target.checked })} /> <span>I agree that Wellora Care may contact me and use these details to arrange care, as described in the <Link to="/legal/privacy">privacy policy</Link>.</span></label>
       <div className="btn-row" style={{ marginTop: 8 }}>
         <button className="btn btn-soft" onClick={back}>Back</button>
-        <button className="btn btn-primary" onClick={confirm}>Confirm booking</button>
+        <button className="btn btn-primary" onClick={confirm} disabled={sending}>{sending ? 'Sending…' : 'Confirm booking'}</button>
       </div>
     </>
   } else {
