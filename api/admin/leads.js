@@ -1,5 +1,6 @@
 import { HttpError, db, ensureSchema, fail, send } from '../_lib/db.js'
 import { requireAdmin } from '../_lib/auth.js'
+import { requireRole } from '../_lib/users.js'
 
 const STATUSES = ['new', 'contacted', 'scheduled', 'closed', 'spam']
 
@@ -12,7 +13,7 @@ async function readJson(req) {
 
 export default async function handler(req, res) {
   try {
-    await requireAdmin(req)
+    const user = await requireAdmin(req)
     await ensureSchema()
     const sql = db()
 
@@ -37,6 +38,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PATCH') {
+      requireRole(user, 'admin', 'staff')
       const { id, status, notes } = await readJson(req)
       if (!id) throw new HttpError(400, 'id is required.')
       if (status && !STATUSES.includes(status)) throw new HttpError(400, 'Unknown status.')

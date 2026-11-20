@@ -1,9 +1,10 @@
 import { HttpError, db, ensureSchema, fail } from '../_lib/db.js'
 import { requireAdmin } from '../_lib/auth.js'
+import { requireRole } from '../_lib/users.js'
 
 export default async function handler(req, res) {
   try {
-    await requireAdmin(req)
+    requireRole(await requireAdmin(req), 'admin', 'staff')
     if (req.method !== 'GET') throw new HttpError(405, 'Use GET.')
     const id = Number(new URL(req.url, 'http://x').searchParams.get('id'))
     if (!id) throw new HttpError(400, 'id is required.')

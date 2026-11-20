@@ -1,6 +1,6 @@
 import { HttpError, db, fail, send } from '../_lib/db.js'
 import { bearer, ipHash, requireAdmin } from '../_lib/auth.js'
-import { checkNewPassword, createSession, ensureAdminSchema, hashPassword, normEmail, sha256, verifyPassword } from '../_lib/users.js'
+import { checkNewPassword, createSession, ensureAdminSchema, hashPassword, normEmail, publicUser, sha256, verifyPassword } from '../_lib/users.js'
 
 const MAX_FAILS = 8 // failed sign-ins allowed per IP per 15 minutes
 const DUMMY_HASH = 'scrypt$' + '0'.repeat(32) + '$' + '0'.repeat(128) // keeps timing equal for unknown emails
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
       const [{ n }] = await sql`SELECT count(*)::int AS n FROM admin_login_attempts WHERE ip_hash = ${ip} AND created_at > now() - interval '15 minutes'`
       if (n >= MAX_FAILS) throw new HttpError(429, 'Too many sign-in attempts. Wait 15 minutes and try again.')
       const e = normEmail(email)
-      const rows = e ? await sql`SELECT id, email, name, password_hash FROM admin_users WHERE email = ${e} AND active` : []
+      const rows = e ? await sql`SELECT id, email, name, role, must_change_password, password_hash FROM admin_users WHERE email = ${e} AND active` : []
       const ok = await verifyPassword(String(password || ''), rows[0]?.password_hash || DUMMY_HASH)
       if (!rows.length || !ok) {
         await sql`INSERT INTO admin_login_attempts (ip_hash, email) VALUES (${ip}, ${e.slice(0, 200)})`
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
       await sql`DELETE FROM admin_sessions WHERE expires_at < now()`
       await sql`UPDATE admin_users SET last_login_at = now() WHERE id = ${u.id}`
       const token = await createSession(u.id)
-      return send(res, 200, { ok: true, token, user: { id: u.id, email: u.email, name: u.name } })
+      return send(res, 200, { ok: true, token, user: publicUser(u) })
     }
 
     if (req.method === 'GET') {
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
       const [row] = await sql`SELECT password_hash FROM admin_users WHERE id = ${user.id}`
       if (!(await verifyPassword(String(currentPassword || ''), row?.password_hash))) throw new HttpError(403, 'Your current password is not right.')
       checkNewPassword(newPassword)
-      await sql`UPDATE admin_users SET password_hash = ${await hashPassword(newPassword)} WHERE id = ${user.id}`
+      await sql`UPDATE admin_users SET password_hash = ${await hashPassword(newPassword)}, must_change_password = false, updated_at = now() WHERE id = ${user.id}`
       await sql`DELETE FROM admin_sessions WHERE user_id = ${user.id} AND token_hash <> ${sha256(bearer(req))}`
       return send(res, 200, { ok: true })
     }

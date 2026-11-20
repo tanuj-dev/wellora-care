@@ -1,4 +1,6 @@
-// Creates an admin login for the admin panel, or resets the password of an existing one.
+// Creates an admin (role: admin) for the admin panel, or resets an existing user's password
+// and makes them an admin. Use it to get back in if every admin is locked out; add
+// everyone else from the Users page in the admin panel.
 //
 //   node --env-file=.env.local scripts/create-admin.mjs you@example.com "Your Name"
 //
@@ -32,7 +34,8 @@ try { checkNewPassword(password) } catch (e) { console.error(e.message); process
 
 await ensureAdminSchema()
 const rows = await db()`
-  INSERT INTO admin_users (email, name, password_hash) VALUES (${email}, ${name}, ${await hashPassword(password)})
-  ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, name = COALESCE(EXCLUDED.name, admin_users.name), active = true
+  INSERT INTO admin_users (email, name, role, password_hash) VALUES (${email}, ${name}, 'admin', ${await hashPassword(password)})
+  ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, name = COALESCE(EXCLUDED.name, admin_users.name),
+    role = 'admin', active = true, must_change_password = false, updated_at = now()
   RETURNING id, email, (xmax = 0) AS created`
 console.log(`${rows[0].created ? 'Created' : 'Updated'} admin ${rows[0].email} (id ${rows[0].id}).`)
