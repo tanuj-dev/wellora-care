@@ -3,7 +3,7 @@ import { requireAdmin } from '../_lib/auth.js'
 
 export default async function handler(req, res) {
   try {
-    requireAdmin(req)
+    await requireAdmin(req)
     if (req.method !== 'GET') throw new HttpError(405, 'Use GET.')
     const id = Number(new URL(req.url, 'http://x').searchParams.get('id'))
     if (!id) throw new HttpError(400, 'id is required.')

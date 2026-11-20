@@ -12,7 +12,7 @@ async function readJson(req) {
 
 export default async function handler(req, res) {
   try {
-    requireAdmin(req)
+    await requireAdmin(req)
     await ensureSchema()
     const sql = db()
 

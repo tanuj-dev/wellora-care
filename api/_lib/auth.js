@@ -1,14 +1,26 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { HttpError } from './db.js'
+import { ensureAdminSchema, userForToken } from './users.js'
 
 const digest = v => createHash('sha256').update(String(v)).digest()
 
-// Admin endpoints accept "Authorization: Bearer <ADMIN_KEY>".
-export function requireAdmin(req) {
+export const bearer = req => String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
+
+// Admin endpoints accept "Authorization: Bearer <token>". The token is either a session
+// token from /api/admin/session (an admin user in the database) or the ADMIN_KEY.
+// Resolves to the signed-in user, or { id: null, name: 'Admin key' } for the key.
+export async function requireAdmin(req) {
+  const got = bearer(req)
+  if (!got) throw new HttpError(401, 'Sign in to continue.')
+  if (got.startsWith('ws_')) {
+    await ensureAdminSchema()
+    const user = await userForToken(got)
+    if (!user) throw new HttpError(401, 'Your session has ended. Sign in again.')
+    return user
+  }
   const key = process.env.ADMIN_KEY
-  if (!key) throw new HttpError(503, 'ADMIN_KEY is not set on the server.')
-  const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-  if (!got || !timingSafeEqual(digest(got), digest(key))) throw new HttpError(401, 'Wrong admin key.')
+  if (key && timingSafeEqual(digest(got), digest(key))) return { id: null, email: null, name: 'Admin key' }
+  throw new HttpError(401, 'Wrong admin key.')
 }
 
 export function ipHash(req) {
