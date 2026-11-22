@@ -38,6 +38,8 @@ export function ensureAdminSchema() {
     await s`ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false`
     await s`ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`
     await s`UPDATE admin_users SET role = 'admin' WHERE role IS NULL`
+    // CRM: cities a user covers (empty = every city), used for routing and visibility.
+    await s`ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS cities TEXT[] NOT NULL DEFAULT '{}'`
   })().catch(e => { ready = null; throw e })
   return ready
 }
@@ -74,15 +76,20 @@ export async function createSession(userId) {
 
 export async function userForToken(token) {
   const rows = await db()`
-    SELECT u.id, u.email, u.name, u.role, u.must_change_password FROM admin_sessions s JOIN admin_users u ON u.id = s.user_id
+    SELECT u.id, u.email, u.name, u.role, u.must_change_password, u.cities FROM admin_sessions s JOIN admin_users u ON u.id = s.user_id
     WHERE s.token_hash = ${sha256(token)} AND s.expires_at > now() AND u.active`
   return rows[0] ? publicUser(rows[0]) : null
 }
 
-// admin: everything, including users. staff: work leads. viewer: read-only, no attachments.
-export const ROLES = ['admin', 'staff', 'viewer']
+// admin: everything, including users. city_head / team_lead: all leads in their cities, assign, reports.
+// counsellor: own leads plus the unassigned queue in their cities. staff: works every lead.
+// viewer: read-only, no attachments. See PERMS in crm.js.
+export const ROLES = ['admin', 'city_head', 'team_lead', 'counsellor', 'staff', 'viewer']
 
-export const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role || 'viewer', mustChangePassword: Boolean(u.must_change_password) })
+export const publicUser = u => ({
+  id: u.id, email: u.email, name: u.name, role: u.role || 'viewer',
+  cities: Array.isArray(u.cities) ? u.cities : [], mustChangePassword: Boolean(u.must_change_password),
+})
 
 export function requireRole(user, ...roles) {
   if (!roles.includes(user.role)) throw new HttpError(403, 'Your role does not allow this.')

@@ -27,7 +27,7 @@ export default async function handler(req, res) {
       const [{ n }] = await sql`SELECT count(*)::int AS n FROM admin_login_attempts WHERE ip_hash = ${ip} AND created_at > now() - interval '15 minutes'`
       if (n >= MAX_FAILS) throw new HttpError(429, 'Too many sign-in attempts. Wait 15 minutes and try again.')
       const e = normEmail(email)
-      const rows = e ? await sql`SELECT id, email, name, role, must_change_password, password_hash FROM admin_users WHERE email = ${e} AND active` : []
+      const rows = e ? await sql`SELECT id, email, name, role, must_change_password, cities, password_hash FROM admin_users WHERE email = ${e} AND active` : []
       const ok = await verifyPassword(String(password || ''), rows[0]?.password_hash || DUMMY_HASH)
       if (!rows.length || !ok) {
         await sql`INSERT INTO admin_login_attempts (ip_hash, email) VALUES (${ip}, ${e.slice(0, 200)})`

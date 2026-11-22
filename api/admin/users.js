@@ -1,4 +1,5 @@
 import { HttpError, db, fail, send } from '../_lib/db.js'
+import { ensureCrmSchema } from '../_lib/crm.js'
 import { requireAdmin } from '../_lib/auth.js'
 import { ROLES, checkNewPassword, ensureAdminSchema, hashPassword, normEmail, requireRole } from '../_lib/users.js'
 
@@ -12,7 +13,13 @@ async function readJson(req) {
 }
 
 const cleanName = n => (typeof n === 'string' ? n.trim().slice(0, 120) || null : undefined)
-const checkRole = r => { if (!ROLES.includes(r)) throw new HttpError(422, 'Pick a role: admin, staff or viewer.') }
+const checkRole = r => { if (!ROLES.includes(r)) throw new HttpError(422, 'Pick a valid role.') }
+// Cities a user covers, lower-cased. Empty means every city.
+const cleanCities = c => {
+  if (c === undefined) return undefined
+  const list = (Array.isArray(c) ? c : String(c || '').split(',')).map(x => String(x).trim().toLowerCase()).filter(Boolean)
+  return [...new Set(list)].slice(0, 30).map(x => x.slice(0, 60))
+}
 
 // There must always be at least one active admin who can sign in.
 async function assertAdminRemains(sql, excludingId) {
@@ -20,18 +27,19 @@ async function assertAdminRemains(sql, excludingId) {
   if (!n) throw new HttpError(409, 'This is the last active admin. Make someone else an admin first.')
 }
 
-const COLUMNS = 'id, email, name, role, active, must_change_password, created_at, last_login_at'
+const COLUMNS = 'id, email, name, role, cities, active, must_change_password, created_at, last_login_at'
 
 // Admins only.
 // GET                                              list users
-// POST   { email, name, role, password }           add a user (they must change the password on first sign-in)
-// PATCH  { id, name?, role?, active?, password? }  edit, enable/disable, or reset password
+// POST   { email, name, role, cities?, password }           add a user (they must change the password on first sign-in)
+// PATCH  { id, name?, role?, cities?, active?, password? }  edit, enable/disable, or reset password
 // DELETE { id }                                    remove a user
 export default async function handler(req, res) {
   try {
     const me = await requireAdmin(req)
     requireRole(me, 'admin')
     await ensureAdminSchema()
+    await ensureCrmSchema()
     const sql = db()
     const cols = sql.unsafe(COLUMNS)
 
@@ -49,8 +57,8 @@ export default async function handler(req, res) {
       const [exists] = await sql`SELECT id FROM admin_users WHERE email = ${email}`
       if (exists) throw new HttpError(409, 'A user with this email already exists.')
       const [user] = await sql`
-        INSERT INTO admin_users (email, name, role, password_hash, must_change_password)
-        VALUES (${email}, ${cleanName(b.name) ?? null}, ${b.role}, ${await hashPassword(b.password)}, true)
+        INSERT INTO admin_users (email, name, role, cities, password_hash, must_change_password)
+        VALUES (${email}, ${cleanName(b.name) ?? null}, ${b.role}, ${cleanCities(b.cities) || []}::text[], ${await hashPassword(b.password)}, true)
         RETURNING ${cols}`
       return send(res, 201, { ok: true, user })
     }
@@ -69,10 +77,12 @@ export default async function handler(req, res) {
       if (b.password !== undefined) checkNewPassword(b.password)
       const hash = b.password !== undefined ? await hashPassword(b.password) : null
       const name = cleanName(b.name)
+      const cities = cleanCities(b.cities)
       const [user] = await sql`
         UPDATE admin_users SET
           name = CASE WHEN ${name !== undefined} THEN ${name ?? null}::text ELSE name END,
           role = COALESCE(${b.role ?? null}::text, role),
+          cities = COALESCE(${cities ?? null}::text[], cities),
           active = COALESCE(${typeof b.active === 'boolean' ? b.active : null}::boolean, active),
           password_hash = COALESCE(${hash}::text, password_hash),
           must_change_password = CASE WHEN ${hash !== null && !self} THEN true ELSE must_change_password END,

@@ -1,6 +1,7 @@
 import Busboy from 'busboy'
 import { randomBytes } from 'node:crypto'
-import { HttpError, db, ensureSchema, fail, send } from './_lib/db.js'
+import { HttpError, db, fail, send } from './_lib/db.js'
+import { afterCapture, contactKeyFor, ensureCrmSchema, findOpenLead, slaDue } from './_lib/crm.js'
 import { ipHash } from './_lib/auth.js'
 
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024 // Vercel caps request bodies at 4.5 MB
@@ -87,7 +88,7 @@ export default async function handler(req, res) {
     if (website) return send(res, 200, { ok: true, ref: 'WC-' + randomBytes(3).toString('hex').toUpperCase() })
 
     validate(kind, data, files)
-    await ensureSchema()
+    await ensureCrmSchema()
     const sql = db()
 
     const ip = ipHash(req)
@@ -97,13 +98,22 @@ export default async function handler(req, res) {
     let priority = kind === 'critical-care' ? 'High' : 'Normal'
     if (kind === 'counselling' && CRISIS.test(data.message || '')) priority = 'Crisis'
 
+    // CRM: a repeat enquiry from a number with an open lead is attached to that lead (BRD CRM-FR-002).
+    const contactKey = contactKeyFor(kind, data)
+    const existing = await findOpenLead(sql, kind, contactKey)
+    const stage = existing ? 'merged' : 'new'
+    const due = existing ? null : slaDue(kind, priority)
+    const city = data.city || null
+
     let row
     for (let i = 0; i < 3 && !row; i++) {
       const ref = 'WC-' + randomBytes(4).toString('hex').toUpperCase().slice(0, 6)
       const rows = await sql`
-        INSERT INTO leads (ref, kind, priority, name, mobile, service, city, data, page, ip_hash)
-        VALUES (${ref}, ${kind}, ${priority}, ${data.name || data.refname || null}, ${data.mobile || null},
-                ${data.service || null}, ${data.city || null}, ${JSON.stringify(data)}, ${String(page).slice(0, 300)}, ${ip})
+        INSERT INTO leads (ref, kind, priority, status, stage, name, mobile, service, city, data, page, ip_hash,
+                           contact_key, duplicate_of, sla_due_at, stage_changed_at)
+        VALUES (${ref}, ${kind}, ${priority}, ${existing ? 'closed' : 'new'}, ${stage}, ${data.name || data.refname || null}, ${data.mobile || null},
+                ${data.service || null}, ${city}, ${JSON.stringify(data)}, ${String(page).slice(0, 300)}, ${ip},
+                ${contactKey}, ${existing?.id ?? null}, ${due}, now())
         ON CONFLICT (ref) DO NOTHING
         RETURNING id, ref`
       row = rows[0]
@@ -114,6 +124,8 @@ export default async function handler(req, res) {
       await sql`INSERT INTO lead_files (lead_id, field, filename, mime, size, content_b64)
                 VALUES (${row.id}, ${file.field}, ${file.filename}, ${file.mime}, ${file.size}, ${file.buf.toString('base64')})`
     }
+    // Routing must never cost the customer their booking: the lead is already saved.
+    try { await afterCapture(sql, row, { kind, priority, city, contactKey, existing }) } catch (e) { console.error('CRM routing failed', e) }
     send(res, 201, { ok: true, ref: row.ref, priority })
   } catch (e) {
     fail(res, e)

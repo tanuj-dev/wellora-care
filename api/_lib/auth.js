@@ -19,7 +19,7 @@ export async function requireAdmin(req) {
     return user
   }
   const key = process.env.ADMIN_KEY
-  if (key && timingSafeEqual(digest(got), digest(key))) return { id: null, email: null, name: 'Admin key', role: 'admin', mustChangePassword: false }
+  if (key && timingSafeEqual(digest(got), digest(key))) return { id: null, email: null, name: 'Admin key', role: 'admin', cities: [], mustChangePassword: false }
   throw new HttpError(401, 'Wrong admin key.')
 }
 
